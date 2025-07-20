@@ -61,6 +61,7 @@ def save_block_comparison_images(epoch, target_blocks, predicted_blocks, ids_mas
         plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make room for suptitle
         plt.savefig(os.path.join(save_dir, f"epoch_{epoch:03d}_block_{block_idx:05d}.png"))
         plt.close(fig) # Close the figure to free up memory
+        print(f"    Saved comparison image: {os.path.join(save_dir, f'epoch_{epoch:03d}_block_{block_idx:05d}.png')}")
 
 
 def evaluate(model, batch):
@@ -106,7 +107,7 @@ def run_training():
     # Log model architecture (optional, but good for tracking)
     # wandb.watch(model) # This can be resource intensive for very large models
 
-    dataset = MultiGridDataset(npy_dir="augmented_grids", normalize=True, num_blocks=10000)
+    dataset = MultiGridDataset(npy_dir="/home/cc/Desktop/liouvilleViT/augmented_grids", normalize=True, num_blocks=10000)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=wandb.config.learning_rate) # Use config for LR
@@ -114,12 +115,15 @@ def run_training():
     best_mse = float('inf')
 
     for epoch in range(1, wandb.config.epochs + 1): # Use config for epochs
+        print(f"\n--- Epoch {epoch}/{wandb.config.epochs} ---")
         model.train()
         total_loss = 0.0 # To track average loss per epoch
         num_batches = 0
         for batch in dataloader:
             batch = batch.to(device)  # shape: [1, 10000, 2, 50, 50]
+            print("Batch shape:", batch.shape)
             pred, ids_mask = model(batch)  # pred: [1, 10000, 50, 50, 2]
+            print("x_blocks.shape:", pred.shape) # Added print statement
 
             target = batch.squeeze(0).permute(0, 2, 3, 1)  # [10000, 50, 50, 2]
             pred = pred.squeeze(0)  # [10000, 50, 50, 2]
@@ -134,6 +138,8 @@ def run_training():
             optimizer.step()
             total_loss += loss.item()
             num_batches += 1
+            # print(f"  Batch {num_batches}: Loss = {loss.item():.6f}") # Optional: print batch loss
+            print(f"  Batch {num_batches+1}: Loss = {loss.item():.6f}")
 
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
@@ -159,6 +165,7 @@ def run_training():
             print(f"✅ Saved new best model at epoch {epoch} (MSE: {mse:.6f})")
     
     wandb.finish() # Finish the WandB run
+    print("Training complete! Best MSE achieved:", best_mse)
 
 
 if __name__ == "__main__":

@@ -18,8 +18,10 @@ class CNNBlockEncoder(nn.Module):
         )
 
     def forward(self, x):
-        return self.encoder(x)  # x: [B, 2, 50, 50] -> [B, out_dim]
-
+        print("  CNNBlockEncoder input shape:", x.shape)
+        out = self.encoder(x)
+        print("  CNNBlockEncoder output shape:", out.shape)
+        return out  # x: [B, 2, 50, 50] -> [B, out_dim]
 
 class MaskedBlockViT(nn.Module):
     def __init__(self, grid_size=100, embed_dim=128, depth=8, num_heads=8, mask_ratio=0.3):
@@ -41,9 +43,7 @@ class MaskedBlockViT(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
 
         # Decoder: map embedding back to full block using convolutions
-        # We need to map embed_dim back to a shape that can be upsampled by convolutions.
         # The CNNBlockEncoder's last conv layer outputs 64 channels at 13x13 resolution.
-        # So we'll project embed_dim back to 64*13*13.
         self.linear_decoder_projection = nn.Sequential(
             nn.Linear(embed_dim, 64 * 13 * 13),
             nn.GELU()
@@ -72,11 +72,14 @@ class MaskedBlockViT(nn.Module):
         return x_masked, ids_keep, ids_mask, ids_restore
 
     def forward(self, x_blocks):
+        print("MaskedBlockViT.forward called")
+        print("  x_blocks shape:", x_blocks.shape)
         # x_blocks: [B, 10000, 2, 50, 50]
         B, N, C, H, W = x_blocks.shape
 
         x = x_blocks.view(-1, C, H, W)  # (B*N, 2, 50, 50)
         x_emb = self.block_encoder(x).view(B, N, -1)  # (B, 10000, embed_dim)
+        print("  x_emb shape after encoder and view:", x_emb.shape)
 
         # Generate 2D positional embeddings by combining row and column embeddings
         row_embed_expanded = self.row_embed.unsqueeze(1)
@@ -84,24 +87,38 @@ class MaskedBlockViT(nn.Module):
         pos_embed_2d = (row_embed_expanded + col_embed_expanded).view(1, self.num_tokens, self.embed_dim)
 
         x_emb = x_emb + pos_embed_2d[:, :N, :] # Add 2D positional embeddings
+        print("  x_emb shape after adding pos_embed_2d:", x_emb.shape)
 
         x_masked, ids_keep, ids_mask, ids_restore = self.random_mask(x_emb, self.mask_ratio)
+        print("  x_masked shape:", x_masked.shape)
+        print("  ids_keep shape:", ids_keep.shape)
+        print("  ids_mask shape:", ids_mask.shape)
+        print("  ids_restore shape:", ids_restore.shape)
 
         encoded = self.transformer(x_masked)
+        print("  encoded shape after transformer:", encoded.shape)
 
         # Prepare full sequence to decode
         B, L, D_encoded = encoded.shape # D_encoded is the embed_dim
         decoder_input = torch.zeros(B, N, D_encoded, device=x.device)
         decoder_input.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, D_encoded), encoded)
+        print("  decoder_input shape:", decoder_input.shape)
 
         # Apply linear projection for each block's embedding
         linear_decoded = self.linear_decoder_projection(decoder_input) # (B, N, 64 * 13 * 13)
+        print("  linear_decoded shape:", linear_decoded.shape)
 
         # Reshape for convolutional decoder input: (B*N, 64, 13, 13)
         conv_input = linear_decoded.view(B * N, 64, 13, 13)
+        print("  conv_input shape:", conv_input.shape)
 
         # Apply convolutional decoder to reconstruct blocks
         pred_flat_conv = self.conv_decoder(conv_input) # (B*N, 2, 50, 50)
+        print("  pred_flat_conv shape:", pred_flat_conv.shape)
+        # Crop to (2, 50, 50) if necessary
+        if pred_flat_conv.shape[2] > 50 or pred_flat_conv.shape[3] > 50:
+            print(f"  Cropping pred_flat_conv from {pred_flat_conv.shape} to (2, 50, 50)")
+            pred_flat_conv = pred_flat_conv[:, :, :50, :50]
 
         # Reshape back to original (B, N, 50, 50, 2)
         pred = pred_flat_conv.permute(0, 2, 3, 1).view(B, N, 50, 50, 2)
