@@ -8,7 +8,9 @@ import numpy as np # Already imported
 import matplotlib.pyplot as plt # New import
 import os # New import
 import wandb 
+from torch.cuda.amp import autocast, GradScaler
 
+print("Script started")
 
 def save_block_comparison_images(epoch, target_blocks, predicted_blocks, ids_mask, num_samples=5, save_dir="block_comparisons"):
     """
@@ -68,10 +70,11 @@ def evaluate(model, batch):
     model.eval()
     with torch.no_grad():
         pred, ids_mask = model(batch)
-        target = batch.squeeze(0).permute(0, 2, 3, 1).cpu().numpy()  # (10000, 50, 50, 2)
-        pred_np = pred.squeeze(0).cpu().numpy()  # (10000, 50, 50, 2)
+        target = batch.squeeze(0).permute(0, 2, 3, 1).cpu().numpy()  # (num_blocks, 50, 50, 2)
+        pred_np = pred.squeeze(0).cpu().numpy()  # (num_blocks, 50, 50, 2)
 
-        mask = torch.zeros((10000,), dtype=torch.bool)
+        num_blocks = pred_np.shape[0]
+        mask = torch.zeros((num_blocks,), dtype=torch.bool)
         mask[ids_mask[0]] = True # ids_mask[0] contains the indices of masked tokens for the first batch item
 
         pred_flat = pred_np[mask.numpy()].reshape(-1)
@@ -85,6 +88,7 @@ def evaluate(model, batch):
 
 
 def run_training():
+    print("Starting training loop")
     # Initialize WandB
     # Replace 'your_project_name' with a descriptive name for your project
     # You can also add 'entity="your_wandb_username"' if you want to log to a specific team/user
@@ -107,12 +111,19 @@ def run_training():
     # Log model architecture (optional, but good for tracking)
     # wandb.watch(model) # This can be resource intensive for very large models
 
-    dataset = MultiGridDataset(npy_dir="/home/cc/Desktop/liouvilleViT/augmented_grids", normalize=True, num_blocks=10000)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
+    dataset = MultiGridDataset(
+        npy_dir="/media/cc/2T/liouvilleViT/augmented_grids",
+        normalize=True,
+        num_blocks=100,
+        dataset_length=1000  # or whatever you want
+    )
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=0) # Set num_workers=0 for debugging
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=wandb.config.learning_rate) # Use config for LR
     loss_fn = nn.MSELoss()
     best_mse = float('inf')
+
+    scaler = GradScaler()  # Initialize GradScaler for mixed precision
 
     for epoch in range(1, wandb.config.epochs + 1): # Use config for epochs
         print(f"\n--- Epoch {epoch}/{wandb.config.epochs} ---")
@@ -120,25 +131,26 @@ def run_training():
         total_loss = 0.0 # To track average loss per epoch
         num_batches = 0
         for batch in dataloader:
-            batch = batch.to(device)  # shape: [1, 10000, 2, 50, 50]
+            batch = batch.to(device)  # shape: [1, num_blocks, 2, 50, 50]
             print("Batch shape:", batch.shape)
-            pred, ids_mask = model(batch)  # pred: [1, 10000, 50, 50, 2]
-            print("x_blocks.shape:", pred.shape) # Added print statement
-
-            target = batch.squeeze(0).permute(0, 2, 3, 1)  # [10000, 50, 50, 2]
-            pred = pred.squeeze(0)  # [10000, 50, 50, 2]
-
-            mask = torch.zeros((10000,), dtype=torch.bool, device=device)
-            mask[ids_mask[0]] = True
-
-            loss = loss_fn(pred[mask], target[mask])
-
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            with autocast():
+                pred, ids_mask = model(batch)  # pred: [1, num_blocks, 50, 50, 2]
+                print("x_blocks.shape:", pred.shape) # Added print statement
+
+                target = batch.squeeze(0).permute(0, 2, 3, 1)  # [num_blocks, 50, 50, 2]
+                pred = pred.squeeze(0)  # [num_blocks, 50, 50, 2]
+
+                num_blocks = pred.shape[0]
+                mask = torch.zeros((num_blocks,), dtype=torch.bool, device=device)
+                mask[ids_mask[0]] = True
+
+                loss = loss_fn(pred[mask], target[mask])
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             total_loss += loss.item()
             num_batches += 1
-            # print(f"  Batch {num_batches}: Loss = {loss.item():.6f}") # Optional: print batch loss
             print(f"  Batch {num_batches+1}: Loss = {loss.item():.6f}")
 
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -148,6 +160,7 @@ def run_training():
         print(f"Epoch {epoch} | Loss: {avg_loss:.6f} | MSE: {mse:.6f} | MAE: {mae:.6f} | PSNR: {psnr:.2f} dB")
 
         # Log metrics to WandB
+        print("About to log to wandb:", {"epoch": epoch, "train_loss": avg_loss, "eval_mse": mse, "eval_mae": mae, "eval_psnr": psnr})
         wandb.log({
             "epoch": epoch,
             "train_loss": avg_loss,
@@ -155,13 +168,16 @@ def run_training():
             "eval_mae": mae,
             "eval_psnr": psnr
         })
+        print("Logged to wandb.")
 
         # Save comparison images after evaluation
         save_block_comparison_images(epoch, target_blocks_eval, pred_blocks_eval, ids_mask_eval)
 
         if mse < best_mse:
             best_mse = mse
+            print("About to save model checkpoint.")
             torch.save(model.state_dict(), "best_masked_block_vit.pt")
+            print("Model checkpoint saved.")
             print(f"✅ Saved new best model at epoch {epoch} (MSE: {mse:.6f})")
     
     wandb.finish() # Finish the WandB run

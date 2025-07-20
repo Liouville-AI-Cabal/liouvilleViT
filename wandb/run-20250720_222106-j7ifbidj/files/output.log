@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/media/cc/2T/liouvilleViT/train_masked_blocks.py", line 172, in <module>
+    run_training()
+  File "/media/cc/2T/liouvilleViT/train_masked_blocks.py", line 110, in run_training
+    dataset = MultiGridDataset(npy_dir="/home/cc/Desktop/liouvilleViT/augmented_grids", normalize=True, num_blocks=10000)
+  File "/media/cc/2T/liouvilleViT/multi_grid_dataset.py", line 9, in __init__
+    self.files = [os.path.join(npy_dir, f) for f in os.listdir(npy_dir) if f.endswith('.npy')]
+FileNotFoundError: [Errno 2] No such file or directory: '/home/cc/Desktop/liouvilleViT/augmented_grids'

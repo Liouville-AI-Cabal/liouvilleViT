@@ -5,14 +5,15 @@ from torch.utils.data import Dataset
 import random
 
 class MultiGridDataset(Dataset):
-    def __init__(self, npy_dir, normalize=True, num_blocks=10000):
+    def __init__(self, npy_dir, normalize=True, num_blocks=10000, dataset_length=1000):
+        self.dataset_length = dataset_length
         self.files = [os.path.join(npy_dir, f) for f in os.listdir(npy_dir) if f.endswith('.npy')]
         self.normalize = normalize
         self.num_blocks = num_blocks
         self.mapped_data = [np.load(f, mmap_mode='r') for f in self.files]
 
     def __len__(self):
-        return 100000
+        return self.dataset_length
 
     def __getitem__(self, idx):
         data = random.choice(self.mapped_data)  # shape: (N, 50, 50, 2)
