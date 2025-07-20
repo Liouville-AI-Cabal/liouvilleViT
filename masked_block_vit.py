@@ -24,6 +24,7 @@ class CNNBlockEncoder(nn.Module):
 class MaskedBlockViT(nn.Module):
     def __init__(self, grid_size=100, embed_dim=128, depth=8, num_heads=8, mask_ratio=0.3):
         super().__init__()
+        self.grid_size = grid_size # Store grid_size for 2D positional embeddings
         self.num_tokens = grid_size ** 2
         self.embed_dim = embed_dim
         self.mask_ratio = mask_ratio
@@ -31,18 +32,28 @@ class MaskedBlockViT(nn.Module):
         # CNN block encoder
         self.block_encoder = CNNBlockEncoder(out_dim=embed_dim)
 
-        # Positional encoding (learnable)
-        self.pos_embed = nn.Parameter(torch.randn(1, self.num_tokens, embed_dim))
+        # 2D Learnable Positional encoding
+        self.row_embed = nn.Parameter(torch.randn(grid_size, embed_dim))
+        self.col_embed = nn.Parameter(torch.randn(grid_size, embed_dim))
 
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
 
-        # Decoder: map embedding back to full block
-        self.decoder = nn.Sequential(
-            nn.Linear(embed_dim, 512),
+        # Decoder: map embedding back to full block using convolutions
+        # We need to map embed_dim back to a shape that can be upsampled by convolutions.
+        # The CNNBlockEncoder's last conv layer outputs 64 channels at 13x13 resolution.
+        # So we'll project embed_dim back to 64*13*13.
+        self.linear_decoder_projection = nn.Sequential(
+            nn.Linear(embed_dim, 64 * 13 * 13),
+            nn.GELU()
+        )
+        self.conv_decoder = nn.Sequential(
+            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2, padding=1, output_padding=1), # -> [64, 25, 25]
             nn.GELU(),
-            nn.Linear(512, 50 * 50 * 2)
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1), # -> [32, 50, 50]
+            nn.GELU(),
+            nn.Conv2d(32, 2, kernel_size=3, padding=1) # -> [2, 50, 50] (final output channels)
         )
 
     def random_mask(self, x, mask_ratio):
@@ -67,17 +78,31 @@ class MaskedBlockViT(nn.Module):
         x = x_blocks.view(-1, C, H, W)  # (B*N, 2, 50, 50)
         x_emb = self.block_encoder(x).view(B, N, -1)  # (B, 10000, embed_dim)
 
-        x_emb = x_emb + self.pos_embed[:, :N, :]
+        # Generate 2D positional embeddings by combining row and column embeddings
+        row_embed_expanded = self.row_embed.unsqueeze(1)
+        col_embed_expanded = self.col_embed.unsqueeze(0)
+        pos_embed_2d = (row_embed_expanded + col_embed_expanded).view(1, self.num_tokens, self.embed_dim)
+
+        x_emb = x_emb + pos_embed_2d[:, :N, :] # Add 2D positional embeddings
 
         x_masked, ids_keep, ids_mask, ids_restore = self.random_mask(x_emb, self.mask_ratio)
 
         encoded = self.transformer(x_masked)
 
         # Prepare full sequence to decode
-        B, L, D = encoded.shape
-        decoder_input = torch.zeros(B, N, D, device=x.device)
-        decoder_input.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, D), encoded)
+        B, L, D_encoded = encoded.shape # D_encoded is the embed_dim
+        decoder_input = torch.zeros(B, N, D_encoded, device=x.device)
+        decoder_input.scatter_(1, ids_keep.unsqueeze(-1).expand(-1, -1, D_encoded), encoded)
 
-        # Decode all tokens
-        pred = self.decoder(decoder_input)  # (B, N, 5000)
-        return pred.view(B, N, 50, 50, 2), ids_mask
+        # Apply linear projection for each block's embedding
+        linear_decoded = self.linear_decoder_projection(decoder_input) # (B, N, 64 * 13 * 13)
+
+        # Reshape for convolutional decoder input: (B*N, 64, 13, 13)
+        conv_input = linear_decoded.view(B * N, 64, 13, 13)
+
+        # Apply convolutional decoder to reconstruct blocks
+        pred_flat_conv = self.conv_decoder(conv_input) # (B*N, 2, 50, 50)
+
+        # Reshape back to original (B, N, 50, 50, 2)
+        pred = pred_flat_conv.permute(0, 2, 3, 1).view(B, N, 50, 50, 2)
+        return pred, ids_mask
