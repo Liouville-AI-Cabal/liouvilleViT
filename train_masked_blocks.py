@@ -70,8 +70,8 @@ def evaluate(model, batch):
     model.eval()
     with torch.no_grad():
         pred, ids_mask = model(batch)
-        target = batch.squeeze(0).permute(0, 2, 3, 1).cpu().numpy()  # (num_blocks, 50, 50, 2)
-        pred_np = pred.squeeze(0).cpu().numpy()  # (num_blocks, 50, 50, 2)
+        target = batch[0].permute(0, 2, 3, 1).cpu().numpy()  # [num_blocks, 50, 50, 2]
+        pred_np = pred[0].cpu().numpy()  # [num_blocks, 50, 50, 2]
 
         num_blocks = pred_np.shape[0]
         mask = torch.zeros((num_blocks,), dtype=torch.bool)
@@ -117,7 +117,7 @@ def run_training():
         num_blocks=100,
         dataset_length=1000  # or whatever you want
     )
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=0) # Set num_workers=0 for debugging
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0) # Set num_workers=0 for debugging
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=wandb.config.learning_rate) # Use config for LR
     loss_fn = nn.MSELoss()
@@ -131,15 +131,15 @@ def run_training():
         total_loss = 0.0 # To track average loss per epoch
         num_batches = 0
         for batch in dataloader:
-            batch = batch.to(device)  # shape: [1, num_blocks, 2, 50, 50]
+            batch = batch.to(device)  # shape: [batch_size, num_blocks, 2, 50, 50]
             print("Batch shape:", batch.shape)
             optimizer.zero_grad()
             with autocast():
-                pred, ids_mask = model(batch)  # pred: [1, num_blocks, 50, 50, 2]
+                pred, ids_mask = model(batch)  # pred: [batch_size, num_blocks, 50, 50, 2]
                 print("x_blocks.shape:", pred.shape) # Added print statement
 
-                target = batch.squeeze(0).permute(0, 2, 3, 1)  # [num_blocks, 50, 50, 2]
-                pred = pred.squeeze(0)  # [num_blocks, 50, 50, 2]
+                target = batch[0].permute(0, 2, 3, 1)  # [num_blocks, 50, 50, 2]
+                pred = pred[0]  # [num_blocks, 50, 50, 2]
 
                 num_blocks = pred.shape[0]
                 mask = torch.zeros((num_blocks,), dtype=torch.bool, device=device)

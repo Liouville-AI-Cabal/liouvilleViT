@@ -9,8 +9,8 @@ ROTATIONS = [0, 90, 180, 270]  # in degrees
 offsets = [(0, 0), (10, 10), (25, 25), (40, 40)]  # example offsets
 
 # Input paths (grayscale images with shape HxWx2 stacked)
-spatial_path = r"C:\Users\jen\Desktop\Liouville\ulam_spiral_liouville.png"
-fft_path = r"C:\Users\jen\Desktop\Liouville\ulam_spiral_fft.png"
+spatial_path = r"/media/cc/2T/liouvilleViT/ulam_spiral_liouville.png"
+fft_path = r"/media/cc/2T/liouvilleViT/ulam_spiral_fft_hi_contrast.png"
 output_dir = "augmented_grids"
 os.makedirs(output_dir, exist_ok=True)
 
