@@ -38,7 +38,15 @@ def save_block_comparison_images(epoch, target_blocks, predicted_blocks, ids_mas
         target = target.permute(0, 3, 1, 4, 2).reshape(grid_size*block_size, grid_size*block_size, 2)
         
         pred = predicted_blocks[sample_idx].detach().cpu()
-        pred = pred.reshape(grid_size, grid_size, block_size, block_size, 2)
+        # Create a copy of the target for visualization
+        pred_viz = target.clone()
+        # Only replace the masked blocks with predictions
+        mask = torch.zeros(pred.shape[0], dtype=torch.bool, device=pred.device)
+        mask[ids_mask[sample_idx]] = True
+        pred_viz[mask] = pred[mask]
+        
+        # Reshape for visualization
+        pred = pred_viz.reshape(grid_size, grid_size, block_size, block_size, 2)
         pred = pred.permute(0, 2, 1, 3, 4).reshape(grid_size*block_size, grid_size*block_size, 2)
         
         # Plot ground truth - spatial channel
