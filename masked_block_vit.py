@@ -49,11 +49,30 @@ class MaskedBlockViT(nn.Module):
             nn.GELU()
         )
         self.conv_decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2, padding=1, output_padding=1), # -> [64, 25, 25]
+            # First upsampling: 13x13 -> 25x25
+            nn.ConvTranspose2d(
+                64, 64,
+                kernel_size=4,  # Changed from 3 to 4
+                stride=2,
+                padding=1,
+                output_padding=0
+            ),
             nn.GELU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1), # -> [32, 50, 50]
+            # Second upsampling: 25x25 -> 50x50
+            nn.ConvTranspose2d(
+                64, 32,
+                kernel_size=4,  # Changed from 3 to 4
+                stride=2,
+                padding=1,
+                output_padding=0
+            ),
             nn.GELU(),
-            nn.Conv2d(32, 2, kernel_size=3, padding=1) # -> [2, 50, 50] (final output channels)
+            # Final convolution to get 2 channels, maintaining 50x50
+            nn.Conv2d(
+                32, 2,
+                kernel_size=3,
+                padding=1  # Explicit padding=1 instead of 'same'
+            )
         )
 
     def random_mask(self, x, mask_ratio):

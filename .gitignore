@@ -1,2 +1,5 @@
+__pycache__/
+*.pyc
 wandb/
+block_comparisons/
 best_masked_block_vit.pt
